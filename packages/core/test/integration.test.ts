@@ -1,12 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { PlaudConfig, PlaudAuth, PlaudClient } from '../src/index.js';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 
-const HAS_CREDS = fs.existsSync(path.join(os.homedir(), '.plaud', 'config.json'));
+const RUN_LIVE = process.env.PLAUD_LIVE === '1';
 
-describe.skipIf(!HAS_CREDS)('integration (live API)', () => {
+describe.skipIf(!RUN_LIVE)('integration (live API)', () => {
   const config = new PlaudConfig();
   const creds = config.getCredentials()!;
   const auth = new PlaudAuth(config);
