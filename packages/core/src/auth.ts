@@ -4,10 +4,27 @@ import type { PlaudTokenData } from './types.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-export interface PlaudLoginInput {
+export interface PlaudOtpRequest {
   email: string;
-  password: string;
   region: 'us' | 'eu';
+}
+
+export interface PlaudOtpSession {
+  /** Short-lived JWT returned by /auth/otp-send-code, passed back to /auth/otp-login. */
+  otpToken: string;
+  /** Resolved region after possible -302 region redirect. May differ from caller's input. */
+  region: 'us' | 'eu';
+}
+
+export interface PlaudOtpSubmit {
+  email: string;
+  code: string;
+  otpToken: string;
+  region: 'us' | 'eu';
+}
+
+function regionFromHostname(host: string): 'us' | 'eu' {
+  return host.includes('euc1') ? 'eu' : 'us';
 }
 
 export class PlaudAuth {
@@ -28,33 +45,70 @@ export class PlaudAuth {
     return cached.accessToken;
   }
 
-  async login(input: PlaudLoginInput): Promise<string> {
+  /**
+   * Step 1 of OTP login: ask Plaud to email a verification code.
+   * Returns a short-lived OTP session token plus the resolved region
+   * (which may differ from input if Plaud redirects to another regional
+   * server via status -302).
+   */
+  async requestLoginCode(input: PlaudOtpRequest, _redirects = 0): Promise<PlaudOtpSession> {
     const baseUrl = BASE_URLS[input.region] ?? BASE_URLS['us'];
-    const body = new URLSearchParams({
-      username: input.email,
-      password: input.password,
-    });
-
-    const res = await fetch(`${baseUrl}/auth/access-token`, {
+    const res = await fetch(`${baseUrl}/auth/otp-send-code`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: input.email }),
     });
 
     const data = await res.json() as {
       status: number;
       msg?: string;
-      access_token: string;
-      token_type: string;
+      token?: string;
+      data?: { domains?: { api?: string } };
     };
 
-    if (data.status !== 0 || !data.access_token) {
-      throw new Error(data.msg || `Login failed (status ${data.status})`);
+    if (data.status === -302 && data.data?.domains?.api) {
+      if (_redirects >= 2) {
+        throw new Error('Plaud kept redirecting between regions; aborting.');
+      }
+      const redirectedRegion = regionFromHostname(data.data.domains.api);
+      return this.requestLoginCode({ email: input.email, region: redirectedRegion }, _redirects + 1);
     }
 
-    const decoded = this.decodeJwtExpiry(data.access_token);
+    if (data.status !== 0 || !data.token) {
+      throw new Error(data.msg || `Failed to send verification code (status ${data.status})`);
+    }
+
+    return { otpToken: data.token, region: input.region };
+  }
+
+  /**
+   * Step 2 of OTP login: submit the emailed code with the session token,
+   * persist email+region+access token on success.
+   */
+  async submitLoginCode(input: PlaudOtpSubmit): Promise<string> {
+    const baseUrl = BASE_URLS[input.region] ?? BASE_URLS['us'];
+    const res = await fetch(`${baseUrl}/auth/otp-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: input.code, token: input.otpToken }),
+    });
+
+    const data = await res.json() as {
+      status: number;
+      msg?: string;
+      access_token?: string;
+      token_type?: string;
+      data?: { access_token?: string };
+    };
+
+    const accessToken = data.access_token ?? data.data?.access_token;
+    if (!accessToken) {
+      throw new Error(data.msg || `Verification failed (status ${data.status})`);
+    }
+
+    const decoded = this.decodeJwtExpiry(accessToken);
     const tokenData: PlaudTokenData = {
-      accessToken: data.access_token,
+      accessToken,
       tokenType: data.token_type || 'Bearer',
       issuedAt: decoded.iat * 1000,
       expiresAt: decoded.exp * 1000,
@@ -62,7 +116,7 @@ export class PlaudAuth {
 
     this.config.saveCredentials({ email: input.email, region: input.region });
     this.config.saveToken(tokenData);
-    return data.access_token;
+    return accessToken;
   }
 
   private isExpiringSoon(token: PlaudTokenData): boolean {

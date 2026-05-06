@@ -31,78 +31,138 @@ describe('PlaudAuth', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('login() persists token and credentials only on success', async () => {
-    const fakeToken = makeJwt(300 * 86400);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
+  describe('requestLoginCode', () => {
+    it('returns the OTP token from a successful send-code response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 0, token: 'otp-session-jwt' }),
+      });
+
+      const session = await auth.requestLoginCode({ email: 'test@plaud.ai', region: 'eu' });
+      expect(session.otpToken).toBe('otp-session-jwt');
+      expect(session.region).toBe('eu');
     });
 
-    const token = await auth.login({ email: 'test@plaud.ai', password: 'pass123', region: 'eu' });
-    expect(token).toBe(fakeToken);
-    expect(config.getToken()?.accessToken).toBe(fakeToken);
-    expect(config.getCredentials()?.email).toBe('test@plaud.ai');
-    expect(config.getCredentials()?.region).toBe('eu');
-  });
+    it('follows a -302 region redirect and reports the resolved region', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: -302, data: { domains: { api: 'https://api-euc1.plaud.ai' } } }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 0, token: 'otp-jwt-after-redirect' }),
+      });
 
-  it('login() does not persist password to disk', async () => {
-    const fakeToken = makeJwt(300 * 86400);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
+      const session = await auth.requestLoginCode({ email: 'test@plaud.ai', region: 'us' });
+      expect(session.region).toBe('eu');
+      expect(session.otpToken).toBe('otp-jwt-after-redirect');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
-    await auth.login({ email: 'test@plaud.ai', password: 'super-secret-password', region: 'eu' });
+    it('throws when send-code returns a non-zero status', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: -1, msg: 'email not found' }),
+      });
 
-    const raw = fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf-8');
-    expect(raw).not.toContain('super-secret-password');
-    expect(raw).not.toContain('password');
+      await expect(
+        auth.requestLoginCode({ email: 'nobody@plaud.ai', region: 'eu' })
+      ).rejects.toThrow('email not found');
+    });
   });
 
-  it('login() does not persist anything on failure', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ status: -2, msg: 'wrong account or password', access_token: '' }),
+  describe('submitLoginCode', () => {
+    it('persists token + credentials on success and never writes the OTP code', async () => {
+      const fakeToken = makeJwt(300 * 86400);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
+      });
+
+      const token = await auth.submitLoginCode({
+        email: 'test@plaud.ai',
+        code: '123456',
+        otpToken: 'otp-session',
+        region: 'eu',
+      });
+      expect(token).toBe(fakeToken);
+      expect(config.getToken()?.accessToken).toBe(fakeToken);
+      expect(config.getCredentials()?.email).toBe('test@plaud.ai');
+      expect(config.getCredentials()?.region).toBe('eu');
+
+      const raw = fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf-8');
+      expect(raw).not.toContain('123456');
+      expect(raw).not.toContain('otp-session');
     });
 
-    await expect(
-      auth.login({ email: 'test@plaud.ai', password: 'wrong', region: 'eu' })
-    ).rejects.toThrow('wrong account or password');
+    it('accepts access_token nested under data', async () => {
+      const fakeToken = makeJwt(300 * 86400);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: 0, data: { access_token: fakeToken } }),
+      });
 
-    expect(config.getToken()).toBeUndefined();
-    expect(config.getCredentials()).toBeUndefined();
-  });
-
-  it('getToken() returns cached token when still valid', async () => {
-    const fakeToken = makeJwt(300 * 86400);
-    config.saveToken({
-      accessToken: fakeToken,
-      tokenType: 'Bearer',
-      issuedAt: Date.now(),
-      expiresAt: Date.now() + 300 * 86400 * 1000,
+      const token = await auth.submitLoginCode({
+        email: 'test@plaud.ai',
+        code: '123456',
+        otpToken: 'otp-session',
+        region: 'eu',
+      });
+      expect(token).toBe(fakeToken);
     });
 
-    const token = await auth.getToken();
-    expect(token).toBe(fakeToken);
-    expect(mockFetch).not.toHaveBeenCalled();
+    it('persists nothing on a wrong-code response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ status: -2, msg: 'invalid verification code' }),
+      });
+
+      await expect(
+        auth.submitLoginCode({
+          email: 'test@plaud.ai',
+          code: '000000',
+          otpToken: 'otp-session',
+          region: 'eu',
+        })
+      ).rejects.toThrow('invalid verification code');
+
+      expect(config.getToken()).toBeUndefined();
+      expect(config.getCredentials()).toBeUndefined();
+    });
   });
 
-  it('getToken() throws when no token stored (instructs to login)', async () => {
-    await expect(auth.getToken()).rejects.toThrow(/plaud login/i);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
+  describe('getToken', () => {
+    it('returns the cached token when still valid', async () => {
+      const fakeToken = makeJwt(300 * 86400);
+      config.saveToken({
+        accessToken: fakeToken,
+        tokenType: 'Bearer',
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 300 * 86400 * 1000,
+      });
 
-  it('getToken() throws when token is expired (no auto-refresh)', async () => {
-    const pastExp = Math.floor(Date.now() / 1000) - 1000;
-    const expiredToken = makeJwt(-1000);
-    config.saveToken({
-      accessToken: expiredToken,
-      tokenType: 'Bearer',
-      issuedAt: (pastExp - 86400) * 1000,
-      expiresAt: pastExp * 1000,
+      const token = await auth.getToken();
+      expect(token).toBe(fakeToken);
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    await expect(auth.getToken()).rejects.toThrow(/expir/i);
-    expect(mockFetch).not.toHaveBeenCalled();
+    it('throws when no token stored', async () => {
+      await expect(auth.getToken()).rejects.toThrow(/plaud login/i);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('throws when token is expired (no auto-refresh)', async () => {
+      const pastExp = Math.floor(Date.now() / 1000) - 1000;
+      const expiredToken = makeJwt(-1000);
+      config.saveToken({
+        accessToken: expiredToken,
+        tokenType: 'Bearer',
+        issuedAt: (pastExp - 86400) * 1000,
+        expiresAt: pastExp * 1000,
+      });
+
+      await expect(auth.getToken()).rejects.toThrow(/expir/i);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 });
