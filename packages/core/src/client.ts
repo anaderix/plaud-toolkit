@@ -51,7 +51,8 @@ export class PlaudClient {
     });
 
     if (!res.ok) {
-      throw new Error(`Plaud API error: ${res.status} ${res.statusText}`);
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Plaud API error: ${res.status} ${res.statusText}${detail ? ' — ' + detail.slice(0, 500) : ''}`);
     }
 
     const data = await res.json();
@@ -293,10 +294,14 @@ export class PlaudClient {
     if (!opts?.templateId || !opts?.templateType || !opts?.tabName) {
       throw new Error('applyTemplate: templateId, templateType, and tabName are required');
     }
+    // post_id is a client-generated millisecond timestamp (the API stores it
+    // back as `extra.ori_post_id` on the resulting note), NOT a template id.
+    // The HAR doc says "<template id>" but the server validates it as int.
+    // The actual template id goes in `summ_type`.
     const data = await this.request(`/ai/sum_new_note/${fileId}`, {
       method: 'POST',
       body: JSON.stringify({
-        post_id: opts.templateId,
+        post_id: Date.now(),
         summ_type: opts.templateId,
         summ_type_type: opts.templateType,
         info: opts.info ?? '',

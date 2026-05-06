@@ -137,7 +137,7 @@ async function main() {
 
   server.tool(
     'plaud_get_merge_task',
-    'Poll the status of a merge task started via plaud_merge_recordings. Returns status (pending/running/completed/failed), progress, and once completed, the merged file metadata.',
+    'Poll the status of a merge task started via plaud_merge_recordings. Returns status (pending/success/failed observed; treat both "success" and "completed" as terminal-ok). The new merged file id is on task.file.id once status === "success". Merges of short recordings typically finish in <10s.',
     { task_id: z.string().describe('Merge task ID returned by plaud_merge_recordings') },
     async (params) => {
       const task = await client.getMergeTask(params.task_id);

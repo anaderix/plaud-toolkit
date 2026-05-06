@@ -71,14 +71,25 @@ export interface PlaudSearchResult {
 
 export interface PlaudMergeTask {
   task_id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | string;
+  /**
+   * Observed values: `'pending'`, `'success'`, `'failed'`. The HAR doc said
+   * the terminal-success state was `'completed'` but live testing showed it's
+   * actually `'success'`. Treat both as terminal-ok in clients that depend
+   * on documentation rather than empirical observation.
+   */
+  status: 'pending' | 'running' | 'success' | 'completed' | 'failed' | string;
   progress?: number;
   source_file_ids?: string[];
   start_time?: number;
   end_time?: number;
   error_message?: string;
-  /** Populated only once status === 'completed'. The new merged file's metadata. */
-  file?: { id: string; filename?: string; [k: string]: unknown };
+  /**
+   * Populated once the merge finishes (status === 'success'). The new merged
+   * file's full metadata — id, filename, filesize, duration, edit_from
+   * ("combine"), serial_number, etc. To poll cleanly: keep calling getMergeTask
+   * until status is one of {success, completed, failed}.
+   */
+  file?: { id: string; filename?: string; edit_from?: string; [k: string]: unknown };
 }
 
 export interface PlaudCustomTemplate {
