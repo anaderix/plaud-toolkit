@@ -8,8 +8,8 @@ export async function loginCommand(_args: string[]): Promise<void> {
 
   try {
     const email = (await ask('Plaud email: ')).trim();
-    const regionInput = await ask('Region (us/eu) [eu]: ');
-    const region = (regionInput.trim() || 'eu') as 'us' | 'eu';
+    const regionInput = await ask('Region (us/eu) [us]: ');
+    const region = (regionInput.trim() || 'us') as 'us' | 'eu';
 
     const config = new PlaudConfig();
     const auth = new PlaudAuth(config);
