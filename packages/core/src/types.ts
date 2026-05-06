@@ -1,6 +1,5 @@
 export interface PlaudCredentials {
   email: string;
-  password: string;
   region: 'us' | 'eu';
 }
 

@@ -5,9 +5,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-// Mock global fetch
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+function makeJwt(expSecondsFromNow: number): string {
+  const exp = Math.floor(Date.now() / 1000) + expSecondsFromNow;
+  const iat = Math.floor(Date.now() / 1000);
+  const payload = Buffer.from(JSON.stringify({ sub: 'abc', exp, iat })).toString('base64url');
+  return `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`;
+}
 
 describe('PlaudAuth', () => {
   let tmpDir: string;
@@ -17,7 +23,6 @@ describe('PlaudAuth', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-auth-'));
     config = new PlaudConfig(tmpDir);
-    config.saveCredentials({ email: 'test@plaud.ai', password: 'pass123', region: 'eu' });
     auth = new PlaudAuth(config);
     mockFetch.mockReset();
   });
@@ -26,33 +31,55 @@ describe('PlaudAuth', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('logs in with email+password and stores token', async () => {
-    const futureExp = Math.floor(Date.now() / 1000) + 300 * 86400;
-    const payload = Buffer.from(JSON.stringify({ sub: 'abc', exp: futureExp, iat: Math.floor(Date.now() / 1000) })).toString('base64url');
-    const fakeToken = `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`;
-
+  it('login() persists token and credentials only on success', async () => {
+    const fakeToken = makeJwt(300 * 86400);
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
     });
 
-    const token = await auth.getToken();
+    const token = await auth.login({ email: 'test@plaud.ai', password: 'pass123', region: 'eu' });
     expect(token).toBe(fakeToken);
-
-    const stored = config.getToken();
-    expect(stored?.accessToken).toBe(fakeToken);
+    expect(config.getToken()?.accessToken).toBe(fakeToken);
+    expect(config.getCredentials()?.email).toBe('test@plaud.ai');
+    expect(config.getCredentials()?.region).toBe('eu');
   });
 
-  it('returns cached token when still valid', async () => {
-    const futureExp = Math.floor(Date.now() / 1000) + 300 * 86400;
-    const payload = Buffer.from(JSON.stringify({ sub: 'abc', exp: futureExp, iat: Math.floor(Date.now() / 1000) })).toString('base64url');
-    const fakeToken = `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`;
+  it('login() does not persist password to disk', async () => {
+    const fakeToken = makeJwt(300 * 86400);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
+    });
 
+    await auth.login({ email: 'test@plaud.ai', password: 'super-secret-password', region: 'eu' });
+
+    const raw = fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf-8');
+    expect(raw).not.toContain('super-secret-password');
+    expect(raw).not.toContain('password');
+  });
+
+  it('login() does not persist anything on failure', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ status: -2, msg: 'wrong account or password', access_token: '' }),
+    });
+
+    await expect(
+      auth.login({ email: 'test@plaud.ai', password: 'wrong', region: 'eu' })
+    ).rejects.toThrow('wrong account or password');
+
+    expect(config.getToken()).toBeUndefined();
+    expect(config.getCredentials()).toBeUndefined();
+  });
+
+  it('getToken() returns cached token when still valid', async () => {
+    const fakeToken = makeJwt(300 * 86400);
     config.saveToken({
       accessToken: fakeToken,
       tokenType: 'Bearer',
       issuedAt: Date.now(),
-      expiresAt: futureExp * 1000,
+      expiresAt: Date.now() + 300 * 86400 * 1000,
     });
 
     const token = await auth.getToken();
@@ -60,11 +87,14 @@ describe('PlaudAuth', () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it('refreshes token when expired', async () => {
-    const pastExp = Math.floor(Date.now() / 1000) - 1000;
-    const payload = Buffer.from(JSON.stringify({ sub: 'abc', exp: pastExp, iat: pastExp - 86400 })).toString('base64url');
-    const expiredToken = `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`;
+  it('getToken() throws when no token stored (instructs to login)', async () => {
+    await expect(auth.getToken()).rejects.toThrow(/plaud login/i);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 
+  it('getToken() throws when token is expired (no auto-refresh)', async () => {
+    const pastExp = Math.floor(Date.now() / 1000) - 1000;
+    const expiredToken = makeJwt(-1000);
     config.saveToken({
       accessToken: expiredToken,
       tokenType: 'Bearer',
@@ -72,35 +102,7 @@ describe('PlaudAuth', () => {
       expiresAt: pastExp * 1000,
     });
 
-    const newExp = Math.floor(Date.now() / 1000) + 300 * 86400;
-    const newPayload = Buffer.from(JSON.stringify({ sub: 'abc', exp: newExp, iat: Math.floor(Date.now() / 1000) })).toString('base64url');
-    const newToken = `eyJhbGciOiJIUzI1NiJ9.${newPayload}.sig`;
-
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ status: 0, access_token: newToken, token_type: 'bearer' }),
-    });
-
-    const token = await auth.getToken();
-    expect(token).toBe(newToken);
-    expect(mockFetch).toHaveBeenCalledOnce();
-  });
-
-  it('throws when no credentials stored', async () => {
-    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plaud-empty-'));
-    const emptyConfig = new PlaudConfig(emptyDir);
-    const emptyAuth = new PlaudAuth(emptyConfig);
-
-    await expect(emptyAuth.getToken()).rejects.toThrow('No credentials');
-    fs.rmSync(emptyDir, { recursive: true, force: true });
-  });
-
-  it('throws on wrong credentials', async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ status: -2, msg: 'wrong account or password', access_token: '' }),
-    });
-
-    await expect(auth.getToken()).rejects.toThrow('wrong account or password');
+    await expect(auth.getToken()).rejects.toThrow(/expir/i);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

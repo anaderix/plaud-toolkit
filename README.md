@@ -10,7 +10,7 @@ Unofficial TypeScript toolkit for the [Plaud](https://www.plaud.ai/) API — cor
 
 This toolkit gives you programmatic access to your own recordings. Download audio files, pull transcripts, sync everything to local folders — your data, your workflow. Built as a monorepo with three packages:
 
-- **`@plaud/core`** — Shared library: authentication, API client, config management. Handles token lifecycle automatically (tokens last ~300 days, auto-refresh when within 30 days of expiry).
+- **`@plaud/core`** — Shared library: authentication, API client, config management. Tokens last ~300 days; when a token expires you re-run `plaud login` (the password is never written to disk).
 - **`@plaud/cli`** — Command-line tool to list, download, transcribe, and sync recordings.
 - **`@plaud/mcp`** — [MCP server](https://modelcontextprotocol.io/) that exposes your Plaud recordings to AI assistants like Claude, making your voice notes searchable and accessible from any MCP-compatible tool.
 
@@ -27,7 +27,7 @@ cd plaud && npm install
 npx tsx packages/cli/bin/plaud.ts login
 ```
 
-Enter your email, password, and region (us/eu). Credentials are stored locally in `~/.plaud/config.json` (mode 0600).
+Enter your email, region (us/eu), and password (input is masked). On success, your email, region, and the access token (JWT) are written to `~/.plaud/config.json` (mode 0600). **Your password is never persisted** — it lives in memory only for the duration of the login call.
 
 > **Note:** If you use Google Sign-In on Plaud, first set a password via "Forgot Password" on [web.plaud.ai](https://web.plaud.ai).
 
@@ -71,7 +71,7 @@ Tools available:
 
 ## Token Management
 
-Tokens are obtained automatically via email+password and last ~300 days. The library refreshes silently when a token is within 30 days of expiry. No manual intervention needed after initial `plaud login`.
+Tokens last ~300 days. Because the password is never persisted, there is no silent auto-refresh — when your token enters its last 30 days, any CLI command will exit with `Error: Token has expired or is expiring soon. Run \`plaud login\` to refresh.` Run `plaud login` again to mint a fresh token. (This is a deliberate trade-off vs. the upstream behavior, which kept the password on disk to enable silent refresh.)
 
 ## API
 

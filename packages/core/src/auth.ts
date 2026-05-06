@@ -4,6 +4,12 @@ import type { PlaudTokenData } from './types.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+export interface PlaudLoginInput {
+  email: string;
+  password: string;
+  region: 'us' | 'eu';
+}
+
 export class PlaudAuth {
   private config: PlaudConfig;
 
@@ -13,22 +19,20 @@ export class PlaudAuth {
 
   async getToken(): Promise<string> {
     const cached = this.config.getToken();
-    if (cached && !this.isExpiringSoon(cached)) {
-      return cached.accessToken;
+    if (!cached) {
+      throw new Error('Not logged in. Run `plaud login` first.');
     }
-    return this.login();
+    if (this.isExpiringSoon(cached)) {
+      throw new Error('Token has expired or is expiring soon. Run `plaud login` to refresh.');
+    }
+    return cached.accessToken;
   }
 
-  async login(): Promise<string> {
-    const creds = this.config.getCredentials();
-    if (!creds) {
-      throw new Error('No credentials configured. Run `plaud login` first.');
-    }
-
-    const baseUrl = BASE_URLS[creds.region] ?? BASE_URLS['us'];
+  async login(input: PlaudLoginInput): Promise<string> {
+    const baseUrl = BASE_URLS[input.region] ?? BASE_URLS['us'];
     const body = new URLSearchParams({
-      username: creds.email,
-      password: creds.password,
+      username: input.email,
+      password: input.password,
     });
 
     const res = await fetch(`${baseUrl}/auth/access-token`, {
@@ -56,6 +60,7 @@ export class PlaudAuth {
       expiresAt: decoded.exp * 1000,
     };
 
+    this.config.saveCredentials({ email: input.email, region: input.region });
     this.config.saveToken(tokenData);
     return data.access_token;
   }

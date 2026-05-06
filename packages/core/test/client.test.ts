@@ -19,7 +19,7 @@ describe('PlaudClient', () => {
     const futureExp = Math.floor(Date.now() / 1000) + 300 * 86400;
     const payload = Buffer.from(JSON.stringify({ sub: 'abc', exp: futureExp, iat: Math.floor(Date.now() / 1000) })).toString('base64url');
     const token = `eyJhbGciOiJIUzI1NiJ9.${payload}.sig`;
-    config.saveCredentials({ email: 't@t.com', password: 'p', region: 'eu' });
+    config.saveCredentials({ email: 't@t.com', region: 'eu' });
     config.saveToken({
       accessToken: token,
       tokenType: 'Bearer',
