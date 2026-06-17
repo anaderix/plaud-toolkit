@@ -35,34 +35,65 @@ describe('PlaudAuth', () => {
     it('returns the OTP token from a successful send-code response', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: 0, token: 'otp-session-jwt' }),
+        text: async () => JSON.stringify({ status: 0, token: 'otp-session-jwt' }),
       });
 
       const session = await auth.requestLoginCode({ email: 'test@plaud.ai', region: 'eu' });
       expect(session.otpToken).toBe('otp-session-jwt');
-      expect(session.region).toBe('eu');
+      expect(session.apiBase).toBe('https://api-euc1.plaud.ai');
     });
 
-    it('follows a -302 region redirect and reports the resolved region', async () => {
+    it('follows a -302 redirect to the server-provided host', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: -302, data: { domains: { api: 'https://api-euc1.plaud.ai' } } }),
+        text: async () => JSON.stringify({ status: -302, data: { domains: { api: 'https://api-euc1.plaud.ai' } } }),
       });
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: 0, token: 'otp-jwt-after-redirect' }),
+        text: async () => JSON.stringify({ status: 0, token: 'otp-jwt-after-redirect' }),
       });
 
       const session = await auth.requestLoginCode({ email: 'test@plaud.ai', region: 'us' });
-      expect(session.region).toBe('eu');
+      expect(session.apiBase).toBe('https://api-euc1.plaud.ai');
       expect(session.otpToken).toBe('otp-jwt-after-redirect');
       expect(mockFetch).toHaveBeenCalledTimes(2);
+      // second attempt must hit the redirected host, not a remapped us/eu host
+      expect(mockFetch.mock.calls[1][0]).toBe('https://api-euc1.plaud.ai/auth/otp-send-code');
+    });
+
+    it('follows a -302 redirect to a region outside us/eu (e.g. apse1)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ status: -302, data: { domains: { api: 'https://api-apse1.plaud.ai' } } }),
+      });
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ status: 0, token: 'apac-otp' }),
+      });
+
+      const session = await auth.requestLoginCode({ email: 'asia@plaud.ai', region: 'us' });
+      expect(session.apiBase).toBe('https://api-apse1.plaud.ai');
+      expect(session.otpToken).toBe('apac-otp');
+      expect(mockFetch.mock.calls[1][0]).toBe('https://api-apse1.plaud.ai/auth/otp-send-code');
+    });
+
+    it('throws a clear error when the server returns a non-JSON (HTML) page', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        text: async () => '<!DOCTYPE html><html><head><title>404</title></head></html>',
+      });
+
+      await expect(
+        auth.requestLoginCode({ email: 'test@plaud.ai', region: 'us' })
+      ).rejects.toThrow(/non-JSON response/);
     });
 
     it('throws when send-code returns a non-zero status', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: -1, msg: 'email not found' }),
+        text: async () => JSON.stringify({ status: -1, msg: 'email not found' }),
       });
 
       await expect(
@@ -72,41 +103,60 @@ describe('PlaudAuth', () => {
   });
 
   describe('submitLoginCode', () => {
-    it('persists token + credentials on success and never writes the OTP code', async () => {
+    it('persists token + credentials (incl. apiBase) on success and never writes the OTP code', async () => {
       const fakeToken = makeJwt(300 * 86400);
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
+        text: async () => JSON.stringify({ status: 0, access_token: fakeToken, token_type: 'bearer' }),
       });
 
       const token = await auth.submitLoginCode({
         email: 'test@plaud.ai',
         code: '123456',
         otpToken: 'otp-session',
-        region: 'eu',
+        apiBase: 'https://api-euc1.plaud.ai',
       });
       expect(token).toBe(fakeToken);
       expect(config.getToken()?.accessToken).toBe(fakeToken);
       expect(config.getCredentials()?.email).toBe('test@plaud.ai');
       expect(config.getCredentials()?.region).toBe('eu');
+      expect(config.getCredentials()?.apiBase).toBe('https://api-euc1.plaud.ai');
 
       const raw = fs.readFileSync(path.join(tmpDir, 'config.json'), 'utf-8');
       expect(raw).not.toContain('123456');
       expect(raw).not.toContain('otp-session');
     });
 
+    it('labels a non-us/eu host (apse1) as apac and stores its apiBase', async () => {
+      const fakeToken = makeJwt(300 * 86400);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: async () => JSON.stringify({ status: 0, access_token: fakeToken }),
+      });
+
+      await auth.submitLoginCode({
+        email: 'asia@plaud.ai',
+        code: '123456',
+        otpToken: 'otp-session',
+        apiBase: 'https://api-apse1.plaud.ai',
+      });
+      expect(config.getCredentials()?.region).toBe('apac');
+      expect(config.getCredentials()?.apiBase).toBe('https://api-apse1.plaud.ai');
+      expect(mockFetch.mock.calls[0][0]).toBe('https://api-apse1.plaud.ai/auth/otp-login');
+    });
+
     it('accepts access_token nested under data', async () => {
       const fakeToken = makeJwt(300 * 86400);
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: 0, data: { access_token: fakeToken } }),
+        text: async () => JSON.stringify({ status: 0, data: { access_token: fakeToken } }),
       });
 
       const token = await auth.submitLoginCode({
         email: 'test@plaud.ai',
         code: '123456',
         otpToken: 'otp-session',
-        region: 'eu',
+        apiBase: 'https://api-euc1.plaud.ai',
       });
       expect(token).toBe(fakeToken);
     });
@@ -114,7 +164,7 @@ describe('PlaudAuth', () => {
     it('persists nothing on a wrong-code response', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ status: -2, msg: 'invalid verification code' }),
+        text: async () => JSON.stringify({ status: -2, msg: 'invalid verification code' }),
       });
 
       await expect(
@@ -122,7 +172,7 @@ describe('PlaudAuth', () => {
           email: 'test@plaud.ai',
           code: '000000',
           otpToken: 'otp-session',
-          region: 'eu',
+          apiBase: 'https://api-euc1.plaud.ai',
         })
       ).rejects.toThrow('invalid verification code');
 

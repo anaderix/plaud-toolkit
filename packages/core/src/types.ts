@@ -1,6 +1,14 @@
 export interface PlaudCredentials {
   email: string;
-  region: 'us' | 'eu';
+  /** Human-readable region label (e.g. 'us', 'eu', 'apac'), best-effort. */
+  region: string;
+  /**
+   * Authoritative API base URL resolved during login (e.g.
+   * 'https://api-apse1.plaud.ai'). Plaud routes accounts to one of several
+   * regional hosts via a -302 redirect; this is the host that actually
+   * answered. Clients should prefer this over `region`.
+   */
+  apiBase?: string;
 }
 
 export interface PlaudTokenData {
@@ -19,6 +27,15 @@ export const BASE_URLS: Record<string, string> = {
   us: 'https://api.plaud.ai',
   eu: 'https://api-euc1.plaud.ai',
 };
+
+/**
+ * Plaud's API sits behind Cloudflare, which 403s requests whose User-Agent
+ * looks like a bot — including Node's default `User-Agent: node`. Sending a
+ * browser-like UA gets us through, matching what the Plaud web app does.
+ */
+export const DEFAULT_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 export interface PlaudRecording {
   id: string;

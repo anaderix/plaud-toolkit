@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { PlaudAuth } from './auth.js';
-import { BASE_URLS } from './types.js';
+import { BASE_URLS, DEFAULT_USER_AGENT } from './types.js';
 import type {
   PlaudRecording,
   PlaudRecordingDetail,
@@ -17,6 +17,7 @@ import type {
 
 function defaultWebHeaders(): Record<string, string> {
   return {
+    'User-Agent': DEFAULT_USER_AGENT,
     'x-device-id': '[object Object]',
     'app-platform': 'web',
     'app-language': 'en',
@@ -26,18 +27,25 @@ function defaultWebHeaders(): Record<string, string> {
 
 export class PlaudClient {
   private auth: PlaudAuth;
-  private region: string;
+  private apiBase: string;
 
-  constructor(auth: PlaudAuth, region: string = 'us') {
+  /**
+   * @param regionOrBase Either a region key ('us'/'eu') or a full API base URL
+   *   (e.g. 'https://api-apse1.plaud.ai'). Prefer passing the `apiBase` stored
+   *   in credentials so accounts outside us/eu reach the right host.
+   */
+  constructor(auth: PlaudAuth, regionOrBase: string = 'us') {
     this.auth = auth;
-    this.region = region;
+    this.apiBase = regionOrBase.startsWith('http')
+      ? regionOrBase
+      : (BASE_URLS[regionOrBase] ?? BASE_URLS['us']);
   }
 
   private get baseUrl(): string {
-    return BASE_URLS[this.region] ?? BASE_URLS['us'];
+    return this.apiBase;
   }
 
-  private async request(path: string, options?: RequestInit): Promise<any> {
+  private async request(path: string, options?: RequestInit, _redirects = 0): Promise<any> {
     const token = await this.auth.getToken();
     const url = `${this.baseUrl}${path}`;
     const res = await fetch(url, {
@@ -58,9 +66,11 @@ export class PlaudClient {
     const data = await res.json();
 
     if (data?.status === -302 && data?.data?.domains?.api) {
-      const domain: string = data.data.domains.api;
-      this.region = domain.includes('euc1') ? 'eu' : 'us';
-      return this.request(path, options);
+      if (_redirects >= 2) {
+        throw new Error('Plaud kept redirecting between regions; aborting.');
+      }
+      this.apiBase = data.data.domains.api;
+      return this.request(path, options, _redirects + 1);
     }
 
     return data;

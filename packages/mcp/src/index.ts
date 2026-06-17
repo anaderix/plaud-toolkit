@@ -14,7 +14,7 @@ async function main() {
   }
 
   const auth = new PlaudAuth(config);
-  const client = new PlaudClient(auth, creds.region);
+  const client = new PlaudClient(auth, creds.apiBase ?? creds.region);
 
   const server = new McpServer({
     name: 'plaud-mcp',

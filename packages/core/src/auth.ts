@@ -1,5 +1,5 @@
 import { PlaudConfig } from './config.js';
-import { BASE_URLS } from './types.js';
+import { BASE_URLS, DEFAULT_USER_AGENT } from './types.js';
 import type { PlaudTokenData } from './types.js';
 
 const TOKEN_REFRESH_BUFFER_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -12,19 +12,47 @@ export interface PlaudOtpRequest {
 export interface PlaudOtpSession {
   /** Short-lived JWT returned by /auth/otp-send-code, passed back to /auth/otp-login. */
   otpToken: string;
-  /** Resolved region after possible -302 region redirect. May differ from caller's input. */
-  region: 'us' | 'eu';
+  /**
+   * Authoritative API base URL resolved after any -302 region redirect
+   * (e.g. 'https://api-apse1.plaud.ai'). May differ from the host implied
+   * by the caller's region input.
+   */
+  apiBase: string;
 }
 
 export interface PlaudOtpSubmit {
   email: string;
   code: string;
   otpToken: string;
-  region: 'us' | 'eu';
+  /** API base URL resolved by requestLoginCode — pass PlaudOtpSession.apiBase. */
+  apiBase: string;
 }
 
-function regionFromHostname(host: string): 'us' | 'eu' {
-  return host.includes('euc1') ? 'eu' : 'us';
+/** Best-effort human label for an API host, for display/storage only. */
+function regionLabel(apiBase: string): string {
+  if (apiBase.includes('euc1')) return 'eu';
+  if (apiBase.includes('apse1')) return 'apac';
+  if (apiBase === BASE_URLS['us']) return 'us';
+  return apiBase;
+}
+
+/**
+ * Parse a fetch Response as JSON, turning a non-JSON body (e.g. an HTML
+ * error/landing page) into a clear error instead of the cryptic
+ * "Unexpected token '<', "<!DOCTYPE "... is not valid JSON".
+ */
+async function parseJsonOrThrow(res: Response, context: string): Promise<any> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const snippet = text.trim().slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error(
+      `${context}: expected JSON but the server returned a non-JSON response ` +
+      `(HTTP ${res.status} ${res.statusText}). This usually means the request reached ` +
+      `the wrong host. Response began: ${snippet}`
+    );
+  }
 }
 
 export class PlaudAuth {
@@ -51,34 +79,40 @@ export class PlaudAuth {
    * (which may differ from input if Plaud redirects to another regional
    * server via status -302).
    */
-  async requestLoginCode(input: PlaudOtpRequest, _redirects = 0): Promise<PlaudOtpSession> {
-    const baseUrl = BASE_URLS[input.region] ?? BASE_URLS['us'];
-    const res = await fetch(`${baseUrl}/auth/otp-send-code`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: input.email }),
-    });
+  async requestLoginCode(input: PlaudOtpRequest): Promise<PlaudOtpSession> {
+    // Start from the host implied by the caller's region, then follow whatever
+    // host Plaud redirects us to. Plaud has more regions than us/eu (e.g.
+    // api-apse1.plaud.ai), so we trust the server-provided domain rather than
+    // mapping it back onto a fixed two-entry table.
+    let apiBase = BASE_URLS[input.region] ?? BASE_URLS['us'];
 
-    const data = await res.json() as {
-      status: number;
-      msg?: string;
-      token?: string;
-      data?: { domains?: { api?: string } };
-    };
+    for (let redirects = 0; redirects <= 2; redirects++) {
+      const res = await fetch(`${apiBase}/auth/otp-send-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': DEFAULT_USER_AGENT },
+        body: JSON.stringify({ username: input.email }),
+      });
 
-    if (data.status === -302 && data.data?.domains?.api) {
-      if (_redirects >= 2) {
-        throw new Error('Plaud kept redirecting between regions; aborting.');
+      const data = await parseJsonOrThrow(res, 'Failed to request login code') as {
+        status: number;
+        msg?: string;
+        token?: string;
+        data?: { domains?: { api?: string } };
+      };
+
+      if (data.status === -302 && data.data?.domains?.api) {
+        apiBase = data.data.domains.api;
+        continue;
       }
-      const redirectedRegion = regionFromHostname(data.data.domains.api);
-      return this.requestLoginCode({ email: input.email, region: redirectedRegion }, _redirects + 1);
+
+      if (data.status !== 0 || !data.token) {
+        throw new Error(data.msg || `Failed to send verification code (status ${data.status})`);
+      }
+
+      return { otpToken: data.token, apiBase };
     }
 
-    if (data.status !== 0 || !data.token) {
-      throw new Error(data.msg || `Failed to send verification code (status ${data.status})`);
-    }
-
-    return { otpToken: data.token, region: input.region };
+    throw new Error('Plaud kept redirecting between regions; aborting.');
   }
 
   /**
@@ -86,14 +120,13 @@ export class PlaudAuth {
    * persist email+region+access token on success.
    */
   async submitLoginCode(input: PlaudOtpSubmit): Promise<string> {
-    const baseUrl = BASE_URLS[input.region] ?? BASE_URLS['us'];
-    const res = await fetch(`${baseUrl}/auth/otp-login`, {
+    const res = await fetch(`${input.apiBase}/auth/otp-login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'User-Agent': DEFAULT_USER_AGENT },
       body: JSON.stringify({ code: input.code, token: input.otpToken }),
     });
 
-    const data = await res.json() as {
+    const data = await parseJsonOrThrow(res, 'Verification failed') as {
       status: number;
       msg?: string;
       access_token?: string;
@@ -114,7 +147,11 @@ export class PlaudAuth {
       expiresAt: decoded.exp * 1000,
     };
 
-    this.config.saveCredentials({ email: input.email, region: input.region });
+    this.config.saveCredentials({
+      email: input.email,
+      region: regionLabel(input.apiBase),
+      apiBase: input.apiBase,
+    });
     this.config.saveToken(tokenData);
     return accessToken;
   }

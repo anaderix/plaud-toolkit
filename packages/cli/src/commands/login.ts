@@ -1,5 +1,5 @@
 import * as readline from 'readline';
-import { PlaudConfig, PlaudAuth } from '@plaud/core';
+import { PlaudConfig, PlaudAuth, BASE_URLS } from '@plaud/core';
 
 export async function loginCommand(_args: string[]): Promise<void> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -15,13 +15,14 @@ export async function loginCommand(_args: string[]): Promise<void> {
     const auth = new PlaudAuth(config);
 
     const session = await auth.requestLoginCode({ email, region });
-    if (session.region !== region) {
-      console.log(`Plaud redirected to the ${session.region.toUpperCase()} region.`);
+    const expectedBase = BASE_URLS[region] ?? BASE_URLS['us'];
+    if (session.apiBase !== expectedBase) {
+      console.log(`Plaud routed your account to ${session.apiBase}.`);
     }
     console.log(`Verification code sent to ${email}.`);
 
     const code = (await ask('Verification code: ')).trim();
-    await auth.submitLoginCode({ email, code, otpToken: session.otpToken, region: session.region });
+    await auth.submitLoginCode({ email, code, otpToken: session.otpToken, apiBase: session.apiBase });
     console.log('Login successful! Token valid for ~300 days.');
   } finally {
     rl.close();
