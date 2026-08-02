@@ -6,6 +6,9 @@
     "plaud": "./bin/plaud.ts"
   },
   "dependencies": {
-    "@plaud/core": "*"
+    "@plaud/core": "*",
+    "openai": "^6.44.0",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   }
 }

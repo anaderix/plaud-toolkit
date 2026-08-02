@@ -1,2 +1,13 @@
 node_modules/
 dist/
+
+# Local Plaud credentials / cookie exports
+cookies.txt
+*.cookies
+
+# Secrets
+.env
+.env.*
+
+# Downloaded audio + archive state (large, local)
+audio/

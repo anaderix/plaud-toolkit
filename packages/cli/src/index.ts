@@ -3,6 +3,7 @@ import { listCommand } from './commands/list.js';
 import { downloadCommand } from './commands/download.js';
 import { transcriptCommand } from './commands/transcript.js';
 import { syncCommand } from './commands/sync.js';
+import { archiveCommand } from './commands/archive.js';
 
 const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   login: loginCommand,
@@ -10,6 +11,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   download: downloadCommand,
   transcript: transcriptCommand,
   sync: syncCommand,
+  archive: archiveCommand,
 };
 
 export async function run(args: string[]): Promise<void> {
@@ -39,9 +41,20 @@ function printUsage(): void {
   console.log(`Usage: plaud <command> [options]
 
 Commands:
-  login                 Save your Plaud credentials
+  login                 Log in via email verification code
+  login --token [TOKEN] Log in with a token from app.plaud.ai (for
+                          Google/Apple sign-in accounts). Token may be passed
+                          as an arg, via PLAUD_TOKEN, or piped on stdin.
   list                  List recordings
   download <id> [dir]   Download audio file
   transcript <id>       Print transcript
-  sync <folder>         Download all new recordings to folder`);
+  sync <folder>         Download all new recordings to folder
+  archive [options]     Transcribe (with speakers) + summarize new recordings.
+                          Diarizes via ElevenLabs (default) and summarizes with an
+                          auto-selected local template. Needs OPENAI_API_KEY plus
+                          ELEVENLABS_API_KEY (or --transcriber whisper).
+                          Options: --dry-run --limit N --id <id[,id2]> --force
+                                   --seed-existing --verbose --speakers N
+                                   --min-duration <sec> --transcriber elevenlabs|whisper
+                                   --vault <dir> --audio-dir <dir> --templates <dir>`);
 }

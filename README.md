@@ -67,9 +67,61 @@ Tools available:
 - `plaud_user_info` — account info
 - `plaud_get_mp3_url` — temporary MP3 download URL
 
+## Meeting archive (`plaud archive`)
+
+Turns **new** Plaud recordings into a vault of transcripts + summaries. Plaud is used only as the audio source — transcription (**with speaker diarization**) is done by **ElevenLabs Scribe**, and summaries by the **OpenAI API** using a locally-stored markdown template that is auto-selected from the inferred meeting type. Designed to be run daily from your own cron.
+
+Per recording it writes `<root>/YYYY-MM-DD-topic/transcript.md` + `summary.md`; audio goes to a separate `audioDir`. State is tracked per recording id in `<audioDir>/.plaud-archive-state.json` (kept with the durable audio files, not in the vault), so re-runs only process new recordings and resume partial ones (a paid transcript is never re-fetched after a later failure).
+
+### Transcription engine (speakers)
+Two selectable transcribers (config `transcriber` or `--transcriber`):
+- **`elevenlabs`** (default) — ElevenLabs Scribe with `diarize=true`. Transcripts are speaker-labeled (`**Speaker 1:** …`) and summaries can attribute who said what. Takes the whole file (no ffmpeg chunking) and uses the original audio for best diarization. Optional `--speakers N` / `numSpeakers` hints the speaker count. Needs `ELEVENLABS_API_KEY`.
+- **`whisper`** — OpenAI Whisper, no speaker labels. Falls back to the ffmpeg compress/split path for its 25 MB limit.
+
+Labels are anonymous (`Speaker 1/2/3`); the summarizer can still attribute turns.
+
+### Prerequisites
+- `OPENAI_API_KEY` (classify + summarize; `OPENAI_BASE_URL` optional).
+- `ELEVENLABS_API_KEY` (default `elevenlabs` transcriber; not needed with `--transcriber whisper`).
+- Keys can be exported or placed in `.env` — `plaud archive` auto-loads `.env` from the current directory and `~/.plaud/.env`. A real exported env var always wins over `.env`. (`.env` is gitignored.)
+- `ffmpeg` + `ffprobe` on PATH — only used by the `whisper` transcriber (compress/split over 25 MB).
+
+### Config — `~/.plaud/archive.json` (all optional)
+```json
+{
+  "vaultRoot": "~/vault/2-Area/Meetings",
+  "audioDir": "../audio",
+  "templatesDir": null,
+  "transcriber": "elevenlabs",
+  "elevenLabsModel": "scribe_v2",
+  "numSpeakers": null,
+  "minDurationSec": 0,
+  "models": { "transcribe": "whisper-1", "classify": "gpt-4o-mini", "summarize": "gpt-4o" },
+  "audio": { "maxBytes": 24000000, "targetBitrateKbps": 32, "chunkSeconds": 1200 },
+  "transcriptLanguage": null
+}
+```
+`minDurationSec` skips recordings shorter than N seconds (0 = process all; e.g. `300` skips clips under 5 min). A named `--id` always overrides it, so you can still process a short one on demand (also `--min-duration <sec>`).
+`templatesDir: null` uses the packaged starters (`standup`, `lecture`, `meeting`, `one-on-one`, `negotiation`, `generic`). A template is a markdown file with YAML frontmatter (`name`, `when_to_use`) + a prompt body containing `{{transcript}}`; the classifier picks the best match by `when_to_use`. For cron, prefer **absolute** paths.
+
+### Bootstrap (avoid a surprise bulk re-transcribe)
+```bash
+plaud archive --dry-run              # show what WOULD run + cost estimate; writes nothing
+plaud archive --seed-existing        # register already-downloaded audio as "downloaded" (no API calls)
+plaud archive --limit 1              # process one end-to-end; inspect output + cost
+plaud archive                        # process all new recordings
+```
+Flags: `--dry-run --limit N --id <recId> --force --seed-existing --verbose --vault <dir> --audio-dir <dir> --templates <dir>`.
+
+### Daily cron
+```
+0 7 * * * cd /path/to/plaud && OPENAI_API_KEY=sk-... npx tsx packages/cli/bin/plaud.ts archive >> ~/.plaud/archive.log 2>&1
+```
+If the Plaud token has expired the run exits nonzero with a `plaud login --token` hint in the log; re-auth and the next run resumes where it left off.
+
 ## Token Management
 
-Tokens last ~300 days. There is no silent auto-refresh — when your token enters its last 30 days, any CLI command will exit with `Error: Token has expired or is expiring soon. Run \`plaud login\` to refresh.` Run `plaud login` again to mint a fresh token (Plaud emails a new OTP each time).
+OTP logins (`plaud login`) mint a token that lasts ~300 days. Accounts created via **Google/Apple sign-in** can't be reached by OTP — use `plaud login --token` and paste the bearer token from your `app.plaud.ai` browser session (the `pld_ut` cookie); those web tokens are short-lived (~24h). When a token expires, any command exits with `Error: Token has expired or is expiring soon.` — re-run the appropriate `plaud login` to refresh.
 
 ## API
 
