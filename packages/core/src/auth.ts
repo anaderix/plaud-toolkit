@@ -1,8 +1,12 @@
 import { PlaudConfig } from './config.js';
 import { BASE_URLS, DEFAULT_USER_AGENT } from './types.js';
-import type { PlaudTokenData } from './types.js';
+import type { PlaudTokenData, PlaudCredentials } from './types.js';
 
-const TOKEN_REFRESH_BUFFER_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// Small safety margin so we don't start a request with a token about to
+// expire mid-flight. There is no auto-refresh, so this must stay short —
+// web-app tokens (login --token) are only valid ~24h, whereas OTP tokens
+// last ~300 days; a large buffer would wrongly reject the former.
+const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // 60 seconds
 
 export interface PlaudOtpRequest {
   email: string;
@@ -156,14 +160,81 @@ export class PlaudAuth {
     return accessToken;
   }
 
+  /**
+   * Save a bearer access token obtained outside the OTP flow — e.g. copied
+   * from the Plaud web app (app.plaud.ai). This is the way to reach accounts
+   * created via Google/Apple sign-in, which Plaud treats as a separate
+   * identity from email-OTP. The correct regional host is discovered by
+   * following Plaud's -302 redirect, so the caller needn't know the region.
+   */
+  async saveAccessToken(accessToken: string): Promise<PlaudCredentials> {
+    const payload = this.decodeJwtPayload(accessToken);
+    if (!payload.exp) {
+      throw new Error('That does not look like a Plaud access token (no expiry claim).');
+    }
+
+    const apiBase = await this.resolveApiBase(accessToken);
+    const tokenData: PlaudTokenData = {
+      accessToken,
+      tokenType: 'Bearer',
+      issuedAt: (payload.iat ?? 0) * 1000,
+      expiresAt: payload.exp * 1000,
+    };
+
+    const credentials: PlaudCredentials = {
+      email: typeof payload.email === 'string' ? payload.email : '',
+      region: regionLabel(apiBase),
+      apiBase,
+    };
+    this.config.saveCredentials(credentials);
+    this.config.saveToken(tokenData);
+    return credentials;
+  }
+
+  /**
+   * Verify a token and find which regional host serves its account by
+   * hitting /user/me and following any -302 region redirect.
+   */
+  private async resolveApiBase(accessToken: string): Promise<string> {
+    let apiBase = BASE_URLS['us'];
+    for (let redirects = 0; redirects <= 2; redirects++) {
+      const res = await fetch(`${apiBase}/user/me`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'User-Agent': DEFAULT_USER_AGENT,
+          'app-platform': 'web',
+          'app-language': 'en',
+        },
+      });
+      const data = await parseJsonOrThrow(res, 'Failed to verify token') as {
+        status: number;
+        msg?: string;
+        data?: { domains?: { api?: string } };
+      };
+      if (data.status === -302 && data.data?.domains?.api) {
+        apiBase = data.data.domains.api;
+        continue;
+      }
+      if (data.status !== 0) {
+        throw new Error(data.msg || `Token rejected by Plaud (status ${data.status}). It may be expired.`);
+      }
+      return apiBase;
+    }
+    throw new Error('Plaud kept redirecting between regions; aborting.');
+  }
+
   private isExpiringSoon(token: PlaudTokenData): boolean {
     return Date.now() + TOKEN_REFRESH_BUFFER_MS > token.expiresAt;
   }
 
   private decodeJwtExpiry(jwt: string): { iat: number; exp: number } {
-    const parts = jwt.split('.');
-    if (parts.length !== 3) throw new Error('Invalid JWT');
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    const payload = this.decodeJwtPayload(jwt);
     return { iat: payload.iat ?? 0, exp: payload.exp ?? 0 };
+  }
+
+  private decodeJwtPayload(jwt: string): Record<string, any> {
+    const parts = jwt.trim().split('.');
+    if (parts.length !== 3) throw new Error('Invalid JWT');
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString());
   }
 }
