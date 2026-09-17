@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlaudAuth } from '../src/auth.js';
+import { PlaudAuth, tokenExpiryWarning } from '../src/auth.js';
 import { PlaudConfig } from '../src/config.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -213,6 +213,28 @@ describe('PlaudAuth', () => {
 
       await expect(auth.getToken()).rejects.toThrow(/expir/i);
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tokenExpiryWarning', () => {
+    const DAY = 86400 * 1000;
+    const now = Date.parse('2026-10-01T00:00:00Z');
+
+    it('is silent when more than 3 days remain', () => {
+      expect(tokenExpiryWarning(now + 30 * DAY, now)).toBeUndefined();
+      expect(tokenExpiryWarning(now + 3 * DAY + 1000, now)).toBeUndefined();
+    });
+
+    it('warns with days and hours when within 3 days', () => {
+      expect(tokenExpiryWarning(now + 2 * DAY + 5 * 3600 * 1000, now)).toMatch(/expires in 2d 5h.*plaud login/);
+    });
+
+    it('warns in hours when under a day', () => {
+      expect(tokenExpiryWarning(now + 7 * 3600 * 1000, now)).toMatch(/expires in 7h/);
+    });
+
+    it('leaves already-expired tokens to getToken()', () => {
+      expect(tokenExpiryWarning(now - 1000, now)).toBeUndefined();
     });
   });
 });

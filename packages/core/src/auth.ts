@@ -5,8 +5,23 @@ import type { PlaudTokenData, PlaudCredentials } from './types.js';
 // Small safety margin so we don't start a request with a token about to
 // expire mid-flight. There is no auto-refresh, so this must stay short —
 // web-app tokens (login --token) are only valid ~24h, whereas OTP tokens
-// last ~300 days; a large buffer would wrongly reject the former.
+// last ~30 days; a large buffer would wrongly reject the former.
 const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // 60 seconds
+
+// Unattended runs (cron) warn when the token is this close to expiring.
+export const TOKEN_EXPIRY_WARNING_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+
+/**
+ * A warning message if the token expires within TOKEN_EXPIRY_WARNING_MS,
+ * otherwise undefined. Already-expired tokens are left to getToken() to report.
+ */
+export function tokenExpiryWarning(expiresAt: number, now = Date.now()): string | undefined {
+  const left = expiresAt - now;
+  if (left <= 0 || left > TOKEN_EXPIRY_WARNING_MS) return undefined;
+  const hours = Math.floor(left / (60 * 60 * 1000));
+  const when = hours >= 24 ? `${Math.floor(hours / 24)}d ${hours % 24}h` : `${hours}h`;
+  return `Warning: Plaud token expires in ${when} (${new Date(expiresAt).toLocaleString()}). Run \`plaud login\` to refresh.`;
+}
 
 export interface PlaudOtpRequest {
   email: string;
@@ -56,6 +71,14 @@ async function parseJsonOrThrow(res: Response, context: string): Promise<any> {
       `(HTTP ${res.status} ${res.statusText}). This usually means the request reached ` +
       `the wrong host. Response began: ${snippet}`
     );
+  }
+}
+
+/** Plaud answered and refused the token (as opposed to a network/host failure). */
+export class TokenRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TokenRejectedError';
   }
 }
 
@@ -195,6 +218,15 @@ export class PlaudAuth {
    * Verify a token and find which regional host serves its account by
    * hitting /user/me and following any -302 region redirect.
    */
+  /**
+   * Ask Plaud whether the stored token is still accepted. Throws
+   * TokenRejectedError if Plaud refuses it; other errors mean the check
+   * itself couldn't be completed (network, wrong host, ...).
+   */
+  async verifyToken(): Promise<void> {
+    await this.resolveApiBase(await this.getToken());
+  }
+
   private async resolveApiBase(accessToken: string): Promise<string> {
     let apiBase = BASE_URLS['us'];
     for (let redirects = 0; redirects <= 2; redirects++) {
@@ -216,7 +248,7 @@ export class PlaudAuth {
         continue;
       }
       if (data.status !== 0) {
-        throw new Error(data.msg || `Token rejected by Plaud (status ${data.status}). It may be expired.`);
+        throw new TokenRejectedError(data.msg || `Token rejected by Plaud (status ${data.status}). It may be expired.`);
       }
       return apiBase;
     }

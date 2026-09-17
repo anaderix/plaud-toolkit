@@ -4,6 +4,7 @@ import { downloadCommand } from './commands/download.js';
 import { transcriptCommand } from './commands/transcript.js';
 import { syncCommand } from './commands/sync.js';
 import { archiveCommand } from './commands/archive.js';
+import { tokenStatusCommand } from './commands/token-status.js';
 
 const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   login: loginCommand,
@@ -12,6 +13,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   transcript: transcriptCommand,
   sync: syncCommand,
   archive: archiveCommand,
+  'token-status': tokenStatusCommand,
 };
 
 export async function run(args: string[]): Promise<void> {
@@ -56,5 +58,9 @@ Commands:
                           Options: --dry-run --limit N --id <id[,id2]> --force
                                    --seed-existing --verbose --speakers N
                                    --min-duration <sec> --transcriber elevenlabs|whisper
-                                   --vault <dir> --audio-dir <dir> --templates <dir>`);
+                                   --vault <dir> --audio-dir <dir> --templates <dir>
+  token-status [options] Show when the token expires. Exit code: 0 ok,
+                          1 expires within --warn-days (default 3), 2 missing,
+                          expired or (with --verify) rejected by Plaud.
+                          Options: --warn-days N --verify`);
 }

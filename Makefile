@@ -5,12 +5,17 @@ PLAUD := npx tsx packages/cli/bin/plaud.ts
 AUDIO_DIR ?= $(PWD)/audio
 ARGS ?=
 
+# token-check mails EMAIL_TO (via mutt) when the token has < WARN_DAYS left.
+EMAIL_TO ?= andrey.u@gmail.com
+WARN_DAYS ?= 3
+NODE_PATH_DIR := $(shell dirname $$(command -v node))
+
 # archive/* run OpenAI; unset any shell-exported OPENAI_API_KEY so the key in
 # .env (or ~/.plaud/.env) is used instead.
 ARCHIVE := env -u OPENAI_API_KEY $(PLAUD) archive --audio-dir $(AUDIO_DIR)
 
 .DEFAULT_GOAL := help
-.PHONY: help install test login login-token list archive archive-dry seed rename-audio rename-audio-apply cron
+.PHONY: help install test login login-token list archive archive-dry seed rename-audio rename-audio-apply token-status token-check cron
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -46,5 +51,19 @@ rename-audio: ## Preview renaming audio files to recordingId_date_title (dry run
 rename-audio-apply: ## Apply the audio rename
 	npx tsx rename-audio.mts $(AUDIO_DIR) --apply
 
-cron: ## Print a daily crontab line for `make archive`
-	@echo "0 7 * * * cd $(PWD) && PATH=\"$$(dirname $$(command -v node)):/usr/bin:/bin\" flock -n /tmp/plaud-archive.lock $(PLAUD) archive --audio-dir $(AUDIO_DIR) >> $$HOME/.plaud/archive.log 2>&1"
+token-status: ## Show when the Plaud token expires (checks with the server)
+	@$(PLAUD) token-status --verify --warn-days $(WARN_DAYS)
+
+token-check: ## Email EMAIL_TO if the token is expiring (< WARN_DAYS), expired or rejected
+	@out=$$($(PLAUD) token-status --verify --warn-days $(WARN_DAYS) 2>&1); rc=$$?; \
+	echo "$$(date '+%F %T') rc=$$rc $$out"; \
+	if [ $$rc -ne 0 ]; then \
+	  printf '%s\n\nRefresh the token:\n  cd $(PWD) && make login\n' "$$out" \
+	    | mutt -s "[PLAUD] Token needs refresh $$(date +%F)" -- $(EMAIL_TO) \
+	    && echo "$$(date '+%F %T') mailed $(EMAIL_TO)" \
+	    || { echo "$$(date '+%F %T') ERROR: mutt send failed"; exit 1; }; \
+	fi
+
+cron: ## Print crontab lines: hourly `make archive`, daily 09:00 `make token-check`
+	@echo '1 * * * * cd $(PWD) && PATH="$(NODE_PATH_DIR):/usr/bin:/bin" flock -n /tmp/plaud-archive.lock make archive >> $$HOME/.plaud/archive.log 2>&1'
+	@echo '0 9 * * * cd $(PWD) && PATH="$(NODE_PATH_DIR):/usr/bin:/bin" make token-check >> $$HOME/.plaud/token-check.log 2>&1'

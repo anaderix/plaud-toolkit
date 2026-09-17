@@ -10,7 +10,7 @@ Unofficial TypeScript toolkit for the [Plaud](https://www.plaud.ai/) API — cor
 
 This toolkit gives you programmatic access to your own recordings. Download audio files, pull transcripts, sync everything to local folders — your data, your workflow. Built as a monorepo with three packages:
 
-- **`@plaud/core`** — Shared library: authentication (via email OTP), API client, config management. Tokens last ~300 days; when a token expires you re-run `plaud login`.
+- **`@plaud/core`** — Shared library: authentication (via email OTP), API client, config management. Tokens last ~30 days; when a token expires you re-run `plaud login`.
 - **`@plaud/cli`** — Command-line tool to list, download, transcribe, and sync recordings.
 - **`@plaud/mcp`** — [MCP server](https://modelcontextprotocol.io/) that exposes your Plaud recordings to AI assistants like Claude, making your voice notes searchable and accessible from any MCP-compatible tool.
 
@@ -119,9 +119,11 @@ Flags: `--dry-run --limit N --id <recId> --force --seed-existing --verbose --vau
 ```
 If the Plaud token has expired the run exits nonzero with a `plaud login --token` hint in the log; re-auth and the next run resumes where it left off.
 
+`make cron` prints ready-to-paste crontab lines: hourly `make archive`, plus a daily 09:00 `make token-check` that emails `EMAIL_TO` (via `mutt`) when the token has fewer than `WARN_DAYS` (default 3) days left, has expired, or is rejected by Plaud.
+
 ## Token Management
 
-OTP logins (`plaud login`) mint a token that lasts ~300 days. Accounts created via **Google/Apple sign-in** can't be reached by OTP — use `plaud login --token` and paste the bearer token from your `app.plaud.ai` browser session (the `pld_ut` cookie); those web tokens are short-lived (~24h). When a token expires, any command exits with `Error: Token has expired or is expiring soon.` — re-run the appropriate `plaud login` to refresh.
+OTP logins (`plaud login`) mint a token that lasts ~30 days; `plaud login` prints the exact expiry, and `plaud archive` logs a warning once fewer than 3 days remain. `plaud token-status [--verify] [--warn-days N]` reports it on demand (exit code 0 ok, 1 expiring, 2 missing/expired/rejected). Accounts created via **Google/Apple sign-in** can't be reached by OTP — use `plaud login --token` and paste the bearer token from your `app.plaud.ai` browser session (the `pld_ut` cookie); those web tokens are short-lived (~24h). When a token expires, any command exits with `Error: Token has expired or is expiring soon.` — re-run the appropriate `plaud login` to refresh.
 
 ## API
 

@@ -1,4 +1,4 @@
-import { PlaudConfig, PlaudAuth, PlaudClient } from '@plaud/core';
+import { PlaudConfig, PlaudAuth, PlaudClient, tokenExpiryWarning } from '@plaud/core';
 import { loadArchiveConfig } from '../archive/config.js';
 import { runArchive, ArchiveOptions } from '../archive/pipeline.js';
 
@@ -47,6 +47,9 @@ export async function archiveCommand(args: string[]): Promise<void> {
   };
 
   const plaudConfig = new PlaudConfig();
+  const token = plaudConfig.getToken();
+  const warning = token && tokenExpiryWarning(token.expiresAt);
+  if (warning) console.warn(warning);
   const creds = plaudConfig.getCredentials();
   const auth = new PlaudAuth(plaudConfig);
   const client = new PlaudClient(auth, creds?.apiBase ?? creds?.region ?? 'us');

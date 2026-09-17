@@ -27,7 +27,7 @@ export async function loginCommand(args: string[]): Promise<void> {
 
     const code = (await ask('Verification code: ')).trim();
     await auth.submitLoginCode({ email, code, otpToken: session.otpToken, apiBase: session.apiBase });
-    console.log('Login successful! Token valid for ~300 days.');
+    console.log(`Login successful! Token valid until ${formatExpiry(config)}.`);
   } finally {
     rl.close();
   }
@@ -61,7 +61,12 @@ async function tokenLoginCommand(args: string[]): Promise<void> {
   const creds = await auth.saveAccessToken(token);
 
   const who = creds.email || 'your account';
-  console.log(`Saved. Logged in as ${who} on ${creds.apiBase}.`);
+  console.log(`Saved. Logged in as ${who} on ${creds.apiBase}. Token valid until ${formatExpiry(config)}.`);
+}
+
+function formatExpiry(config: PlaudConfig): string {
+  const token = config.getToken();
+  return token ? new Date(token.expiresAt).toLocaleString() : 'unknown';
 }
 
 /** Resolve the token from arg → env → stdin → interactive prompt. */
