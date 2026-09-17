@@ -15,6 +15,7 @@ describe('StateStore', () => {
     expect(r.plaudId).toBe('rec1');
     expect(r.stages).toEqual({
       downloaded: false, prepared: false, transcribed: false, classified: false, summarized: false,
+      archived: false,
     });
   });
 

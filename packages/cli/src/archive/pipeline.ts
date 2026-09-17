@@ -5,6 +5,7 @@ import type { PlaudClient } from '@plaud/core';
 import type { PlaudRecording } from '@plaud/core';
 import type { ResolvedConfig } from './config.js';
 import { StateStore } from './state.js';
+import { archiveAudio } from './audio-archive.js';
 import { audioSlug, topicSlug, isDescriptiveTitle, dateStamp } from './slug.js';
 import { prepareAudio, planPreparation, AudioConfig } from './ffmpeg.js';
 import { OpenAIEngine, Engine } from './openai.js';
@@ -27,6 +28,8 @@ export interface ArchiveOptions {
   limit?: number;
   ids?: string[];
   force?: boolean;
+  /** Only move finished recordings' audio to audioArchiveDir; no Plaud/LLM calls. */
+  archiveAudioOnly?: boolean;
   seedExisting?: boolean;
   verbose?: boolean;
 }
@@ -57,10 +60,13 @@ function audioBaseName(rec: PlaudRecording): string {
   return `${rec.id}_${dateStamp(rec.start_time)}_${audioSlug(rec.filename || rec.id)}`;
 }
 
-function existingAudio(audioDir: string, base: string): string | null {
-  for (const ext of ['mp3', 'opus']) {
-    const p = path.join(audioDir, `${base}.${ext}`);
-    if (fs.existsSync(p) && fs.statSync(p).size > 0) return p;
+function existingAudio(dirs: (string | null)[], base: string): string | null {
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const ext of ['mp3', 'opus']) {
+      const p = path.join(dir, `${base}.${ext}`);
+      if (fs.existsSync(p) && fs.statSync(p).size > 0) return p;
+    }
   }
   return null;
 }
@@ -81,7 +87,7 @@ function frontmatter(fields: Record<string, string | number>): string {
 
 async function ensureAudio(rec: PlaudRecording, deps: Deps): Promise<string> {
   const base = audioBaseName(rec);
-  const existing = existingAudio(deps.config.audioDir, base);
+  const existing = existingAudio([deps.config.audioDir, deps.config.audioArchiveDir], base);
   if (existing) return existing;
 
   fs.mkdirSync(deps.config.audioDir, { recursive: true });
@@ -284,7 +290,51 @@ async function processRecording(rec: PlaudRecording, deps: Deps): Promise<void> 
     lastError: null,
   });
 
+  // 7. move the audio to long-term storage — last, so any earlier failure
+  // leaves the mp3 local and the re-run neither re-downloads nor re-pays.
+  archiveAudioFor(id, deps.state, deps.config.audioArchiveDir);
+
   log(`✓ ${date}  ${template}  ${path.basename(outDir!)}`);
+}
+
+/**
+ * Move one recording's audio into config.audioArchiveDir and record it in the
+ * state. Never throws: failing to archive must not fail a processed recording.
+ */
+function archiveAudioFor(id: string, state: StateStore, archiveDir: string | null): void {
+  const rec = state.get(id);
+  if (!archiveDir || !rec?.audioFile || rec.stages.archived) return;
+
+  try {
+    const res = archiveAudio(rec.audioFile, archiveDir);
+    if (res.moved || res.reason === 'already in archive') {
+      state.update(id, {
+        audioFile: res.path,
+        stages: { ...rec.stages, archived: true },
+      });
+    } else {
+      log(`  audio not archived (${res.reason})`);
+    }
+  } catch (err: any) {
+    log(`  audio not archived: ${err?.message ?? err}`);
+    state.update(id, { lastError: `archive audio: ${err?.message ?? err}` });
+  }
+}
+
+/**
+ * Sweep already-finished recordings whose audio is still local (or was moved
+ * out of band, e.g. by `rclone move`) and bring the state in line.
+ */
+function archiveFinishedAudio(state: StateStore, archiveDir: string | null): number {
+  if (!archiveDir) return 0;
+  let n = 0;
+  for (const id of state.ids()) {
+    const rec = state.get(id)!;
+    if (!rec.stages.summarized || rec.stages.archived) continue;
+    archiveAudioFor(id, state, archiveDir);
+    if (state.get(id)!.stages.archived) n++;
+  }
+  return n;
 }
 
 // ---- entry point --------------------------------------------------------
@@ -310,6 +360,15 @@ export async function runArchive(
     whisperModel: config.models.transcribe,
   });
 
+  // --archive-audio-only: reconcile/move audio for finished recordings and stop.
+  // Deliberately before any API call, so it works with an expired token.
+  if (opts.archiveAudioOnly) {
+    if (!config.audioArchiveDir) throw new Error('--archive-audio-only needs audioArchiveDir (or --audio-archive-dir).');
+    const n = archiveFinishedAudio(state, config.audioArchiveDir);
+    log(`Archived audio for ${n} recording(s) to ${config.audioArchiveDir}.`);
+    return result;
+  }
+
   let recordings = (await client.listRecordings()).filter(r => !r.is_trash);
   const explicitIds = !!(opts.ids && opts.ids.length);
   if (explicitIds) {
@@ -329,7 +388,7 @@ export async function runArchive(
   // --seed-existing: register already-downloaded audio as downloaded, no API calls.
   if (opts.seedExisting) {
     for (const rec of recordings) {
-      const found = existingAudio(config.audioDir, audioBaseName(rec));
+      const found = existingAudio([config.audioDir, config.audioArchiveDir], audioBaseName(rec));
       if (!found) continue;
       state.ensure(rec.id, { title: rec.filename || '', startTime: rec.start_time, durationMs: rec.duration });
       state.update(rec.id, {
@@ -366,6 +425,13 @@ export async function runArchive(
         `  ${rec.id}  ${date}-${topic}  ${Math.round(rec.duration / 60000)}m  ${prep}  ~$${usd.toFixed(3)}`,
       );
     }
+    if (config.audioArchiveDir) {
+      const pending = state.ids().filter(id => {
+        const r = state.get(id)!;
+        return r.stages.summarized && !r.stages.archived && !!r.audioFile && fs.existsSync(r.audioFile);
+      }).length;
+      log(`\n${pending} finished recording(s) still have local audio to move to ${config.audioArchiveDir}.`);
+    }
     log(`\nEstimated transcription cost: ~$${result.estimatedUsd.toFixed(2)} (summary LLM cost not estimated). Nothing was written.`);
     return result;
   }
@@ -395,7 +461,7 @@ export async function runArchive(
   if (opts.force) {
     for (const rec of sliced) {
       state.update(rec.id, {
-        stages: { downloaded: false, prepared: false, transcribed: false, classified: false, summarized: false },
+        stages: { downloaded: false, prepared: false, transcribed: false, classified: false, summarized: false, archived: false },
       });
       fs.rmSync(workDirFor(config, rec.id), { recursive: true, force: true });
     }
@@ -417,6 +483,9 @@ export async function runArchive(
       fs.rmSync(workDirFor(config, rec.id), { recursive: true, force: true });
     }
   }
+
+  const archived = archiveFinishedAudio(state, config.audioArchiveDir);
+  if (archived > 0) log(`Archived audio for ${archived} recording(s) to ${config.audioArchiveDir}.`);
 
   log(`\nDone: ${result.processed} processed, ${result.skipped} already done, ${result.failed} failed.`);
   return result;

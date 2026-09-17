@@ -17,6 +17,8 @@ const PACKAGED_TEMPLATES_DIR = path.resolve(
 const ArchiveConfigSchema = z.object({
   vaultRoot: z.string().default('~/vault/2-Area/Meetings'),
   audioDir: z.string().default('../audio'),
+  // Where audio is moved once a recording is fully processed (null = keep it in audioDir).
+  audioArchiveDir: z.string().nullable().default(null),
   templatesDir: z.string().nullable().default(null),
   models: z
     .object({
@@ -47,6 +49,7 @@ export type ArchiveFileConfig = z.infer<typeof ArchiveConfigSchema>;
 export interface ArchiveFlags {
   vault?: string;
   audioDir?: string;
+  audioArchiveDir?: string;
   templates?: string;
   transcriber?: 'elevenlabs' | 'whisper';
   numSpeakers?: number;
@@ -56,6 +59,7 @@ export interface ArchiveFlags {
 export interface ResolvedConfig {
   vaultRoot: string;
   audioDir: string;
+  audioArchiveDir: string | null;
   templatesDir: string;
   models: ArchiveFileConfig['models'];
   audio: ArchiveFileConfig['audio'];
@@ -133,10 +137,12 @@ export function loadArchiveConfig(flags: ArchiveFlags = {}): ResolvedConfig {
   const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY ?? '';
 
   const templatesRaw = flags.templates ?? parsed.templatesDir;
+  const archiveDirRaw = flags.audioArchiveDir ?? parsed.audioArchiveDir;
 
   return {
     vaultRoot: expandPath(flags.vault ?? parsed.vaultRoot),
     audioDir: expandPath(flags.audioDir ?? parsed.audioDir),
+    audioArchiveDir: archiveDirRaw ? expandPath(archiveDirRaw) : null,
     templatesDir: templatesRaw ? expandPath(templatesRaw) : PACKAGED_TEMPLATES_DIR,
     models: parsed.models,
     audio: parsed.audio,

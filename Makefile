@@ -6,16 +6,17 @@ AUDIO_DIR ?= $(PWD)/audio
 ARGS ?=
 
 # token-check mails EMAIL_TO (via mutt) when the token has < WARN_DAYS left.
+AUDIO_ARCHIVE_DIR ?= /mnt/gdrive/plaud-audio
 EMAIL_TO ?= andrey.u@gmail.com
 WARN_DAYS ?= 3
 NODE_PATH_DIR := $(shell dirname $$(command -v node))
 
 # archive/* run OpenAI; unset any shell-exported OPENAI_API_KEY so the key in
 # .env (or ~/.plaud/.env) is used instead.
-ARCHIVE := env -u OPENAI_API_KEY $(PLAUD) archive --audio-dir $(AUDIO_DIR)
+ARCHIVE := env -u OPENAI_API_KEY $(PLAUD) archive --audio-dir $(AUDIO_DIR) --audio-archive-dir $(AUDIO_ARCHIVE_DIR)
 
 .DEFAULT_GOAL := help
-.PHONY: help install test login login-token list archive archive-dry seed rename-audio rename-audio-apply token-status token-check cron
+.PHONY: help install test login login-token list archive archive-dry seed rename-audio rename-audio-apply token-status token-check audio-archive-init audio-migrate cron
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -63,6 +64,15 @@ token-check: ## Email EMAIL_TO if the token is expiring (< WARN_DAYS), expired o
 	    && echo "$$(date '+%F %T') mailed $(EMAIL_TO)" \
 	    || { echo "$$(date '+%F %T') ERROR: mutt send failed"; exit 1; }; \
 	fi
+
+audio-archive-init: ## Create AUDIO_ARCHIVE_DIR + its marker file (run once, mount must be up)
+	@mkdir -p "$(AUDIO_ARCHIVE_DIR)"
+	@touch "$(AUDIO_ARCHIVE_DIR)/.plaud-audio-archive"
+	@echo "Ready: $(AUDIO_ARCHIVE_DIR)"
+
+audio-migrate: ## One-off: rclone move existing local mp3s to Drive, then reconcile state
+	rclone move $(AUDIO_DIR) gdrive:_Sync/plaud-audio --include '*.mp3' --include '*.opus' --progress
+	$(ARCHIVE) --archive-audio-only
 
 cron: ## Print crontab lines: hourly `make archive`, daily 09:00 `make token-check`
 	@echo '1 * * * * cd $(PWD) && PATH="$(NODE_PATH_DIR):/usr/bin:/bin" flock -n /tmp/plaud-archive.lock make archive >> $$HOME/.plaud/archive.log 2>&1'

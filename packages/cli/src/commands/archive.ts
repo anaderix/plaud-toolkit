@@ -30,6 +30,7 @@ export async function archiveCommand(args: string[]): Promise<void> {
   const config = loadArchiveConfig({
     vault: flagValue(args, '--vault'),
     audioDir: flagValue(args, '--audio-dir'),
+    audioArchiveDir: flagValue(args, '--audio-archive-dir'),
     templates: flagValue(args, '--templates'),
     transcriber: transcriberFlag as 'elevenlabs' | 'whisper' | undefined,
     numSpeakers: speakersRaw ? parseInt(speakersRaw, 10) : undefined,
@@ -42,6 +43,7 @@ export async function archiveCommand(args: string[]): Promise<void> {
     limit: limitRaw ? parseInt(limitRaw, 10) : undefined,
     ids: flagValues(args, '--id'),
     force: args.includes('--force'),
+    archiveAudioOnly: args.includes('--archive-audio-only'),
     seedExisting: args.includes('--seed-existing'),
     verbose: args.includes('--verbose'),
   };

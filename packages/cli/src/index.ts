@@ -56,9 +56,10 @@ Commands:
                           auto-selected local template. Needs OPENAI_API_KEY plus
                           ELEVENLABS_API_KEY (or --transcriber whisper).
                           Options: --dry-run --limit N --id <id[,id2]> --force
-                                   --seed-existing --verbose --speakers N
+                                   --seed-existing --verbose --speakers N --archive-audio-only
                                    --min-duration <sec> --transcriber elevenlabs|whisper
                                    --vault <dir> --audio-dir <dir> --templates <dir>
+                                   --audio-archive-dir <dir>
   token-status [options] Show when the token expires. Exit code: 0 ok,
                           1 expires within --warn-days (default 3), 2 missing,
                           expired or (with --verify) rejected by Plaud.

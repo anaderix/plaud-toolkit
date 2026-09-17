@@ -8,6 +8,8 @@ const StagesSchema = z.object({
   transcribed: z.boolean().default(false),
   classified: z.boolean().default(false),
   summarized: z.boolean().default(false),
+  /** Audio moved out to the long-term archive dir (e.g. a Google Drive mount). */
+  archived: z.boolean().default(false),
 });
 export type Stages = z.infer<typeof StagesSchema>;
 
@@ -24,6 +26,7 @@ const RecordSchema = z.object({
     transcribed: false,
     classified: false,
     summarized: false,
+    archived: false,
   }),
   templateUsed: z.string().nullable().default(null),
   topicSlug: z.string().nullable().default(null),
@@ -73,6 +76,11 @@ export class StateStore {
     const tmp = `${this.filePath}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2));
     fs.renameSync(tmp, this.filePath);
+  }
+
+  /** All known recording ids, in insertion order. */
+  ids(): string[] {
+    return Object.keys(this.state.recordings);
   }
 
   get(id: string): ArchiveRecord | undefined {

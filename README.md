@@ -102,6 +102,8 @@ Labels are anonymous (`Speaker 1/2/3`); the summarizer can still attribute turns
 }
 ```
 `minDurationSec` skips recordings shorter than N seconds (0 = process all; e.g. `300` skips clips under 5 min). A named `--id` always overrides it, so you can still process a short one on demand (also `--min-duration <sec>`).
+`audioArchiveDir` (or `--audio-archive-dir`) moves each recording's audio there once it is fully transcribed **and** summarized — e.g. `/mnt/gdrive/plaud-audio` on an rclone Google Drive mount — so the local disk only holds work in progress. `null` keeps audio in `audioDir`. The move is skipped unless the target holds a `.plaud-audio-archive` marker file (`make audio-archive-init`), which keeps a dropped mount from silently filling the local disk. Audio is looked up in both directories, so `--force` re-transcribes from the archived copy instead of re-downloading. With `--vfs-cache-mode full`, rclone reports the write as done and uploads in the background; the data is in rclone's on-disk cache until then. To move audio you already have, prefer `make audio-migrate` (`rclone move`, checksum-verified, bypasses the mount) — the next archive run reconciles the state without touching Drive.
+
 `templatesDir: null` uses the packaged starters (`standup`, `lecture`, `meeting`, `one-on-one`, `negotiation`, `generic`). A template is a markdown file with YAML frontmatter (`name`, `when_to_use`) + a prompt body containing `{{transcript}}`; the classifier picks the best match by `when_to_use`. For cron, prefer **absolute** paths.
 
 ### Bootstrap (avoid a surprise bulk re-transcribe)
@@ -118,6 +120,8 @@ Flags: `--dry-run --limit N --id <recId> --force --seed-existing --verbose --vau
 0 7 * * * cd /path/to/plaud && OPENAI_API_KEY=sk-... npx tsx packages/cli/bin/plaud.ts archive >> ~/.plaud/archive.log 2>&1
 ```
 If the Plaud token has expired the run exits nonzero with a `plaud login --token` hint in the log; re-auth and the next run resumes where it left off.
+
+Audio of finished recordings is moved to `audioArchiveDir` at the end of every run; `plaud archive --archive-audio-only` does just that step (no Plaud or LLM calls, so it works with an expired token).
 
 `make cron` prints ready-to-paste crontab lines: hourly `make archive`, plus a daily 09:00 `make token-check` that emails `EMAIL_TO` (via `mutt`) when the token has fewer than `WARN_DAYS` (default 3) days left, has expired, or is rejected by Plaud.
 
