@@ -11,15 +11,21 @@ export async function loginCommand(args: string[]): Promise<void> {
     new Promise(resolve => rl.question(q, resolve));
 
   try {
-    const email = (await ask('Plaud email: ')).trim();
-    const regionInput = await ask('Region (us/eu) [us]: ');
-    const region = (regionInput.trim() || 'us') as 'us' | 'eu';
+    const email = (flagValue(args, '--email') ?? (await ask('Plaud email: '))).trim();
+    if (!email) throw new Error('No email provided.');
+
+    const regions = Object.keys(BASE_URLS);
+    const regionArg = flagValue(args, '--region');
+    const region = (regionArg ?? (await ask(`Region (${regions.join('/')}) [us]: `))).trim().toLowerCase() || 'us';
+    if (!BASE_URLS[region]) {
+      throw new Error(`Unknown region "${region}". Expected one of: ${regions.join(', ')}.`);
+    }
 
     const config = new PlaudConfig();
     const auth = new PlaudAuth(config);
 
-    const session = await auth.requestLoginCode({ email, region });
-    const expectedBase = BASE_URLS[region] ?? BASE_URLS['us'];
+    const session = await auth.requestLoginCode({ email, region: region as 'us' | 'eu' });
+    const expectedBase = BASE_URLS[region];
     if (session.apiBase !== expectedBase) {
       console.log(`Plaud routed your account to ${session.apiBase}.`);
     }
@@ -62,6 +68,17 @@ async function tokenLoginCommand(args: string[]): Promise<void> {
 
   const who = creds.email || 'your account';
   console.log(`Saved. Logged in as ${who} on ${creds.apiBase}. Token valid until ${formatExpiry(config)}.`);
+}
+
+/** Read `--name value` or `--name=value`; undefined when absent. */
+function flagValue(args: string[], name: string): string | undefined {
+  const eq = args.find(a => a.startsWith(`${name}=`));
+  if (eq) return eq.slice(name.length + 1);
+  const i = args.indexOf(name);
+  if (i < 0) return undefined;
+  const v = args[i + 1];
+  if (!v || v.startsWith('-')) throw new Error(`${name} requires a value.`);
+  return v;
 }
 
 function formatExpiry(config: PlaudConfig): string {

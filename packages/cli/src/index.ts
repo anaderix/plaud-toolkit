@@ -43,7 +43,9 @@ function printUsage(): void {
   console.log(`Usage: plaud <command> [options]
 
 Commands:
-  login                 Log in via email verification code
+  login [--email E] [--region us|eu]
+                        Log in via email verification code. Prompts for
+                          email/region when not given as flags.
   login --token [TOKEN] Log in with a token from app.plaud.ai (for
                           Google/Apple sign-in accounts). Token may be passed
                           as an arg, via PLAUD_TOKEN, or piped on stdin.

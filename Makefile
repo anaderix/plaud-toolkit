@@ -9,6 +9,8 @@ ARGS ?=
 AUDIO_ARCHIVE_DIR ?= /mnt/gdrive/plaud-audio
 EMAIL_TO ?= andrey.u@gmail.com
 WARN_DAYS ?= 3
+PLAUD_EMAIL ?= andrey.u+plaud@gmail.com
+PLAUD_REGION ?= eu
 NODE_PATH_DIR := $(shell dirname $$(command -v node))
 
 # archive/* run OpenAI; unset any shell-exported OPENAI_API_KEY so the key in
@@ -29,7 +31,7 @@ test: ## Run the test suite (vitest)
 	npm test
 
 login: ## Log in via email OTP (plaud login)
-	$(PLAUD) login
+	$(PLAUD) login --email $(PLAUD_EMAIL) --region $(PLAUD_REGION)
 
 login-token: ## Log in by pasting a web token (Google/Apple accounts)
 	$(PLAUD) login --token
